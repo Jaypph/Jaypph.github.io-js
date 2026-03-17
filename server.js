@@ -18,3 +18,7 @@ app.get('/api/data', (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server kører på port ${PORT}`);
 });
+// Tilføj denne rute øverst sammen med dine andre app.get()
+app.get('/', (req, res) => {
+    res.send('Backend kører korrekt på Render!');
+});
