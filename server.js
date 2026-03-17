@@ -1,24 +1,19 @@
 const express = require('express');
-const path = require('path');
+const cors = require('cors');
 const app = express();
 
-// Porten skal dynamisk læses fra Render (process.env.PORT)
-const PORT = process.env.PORT || 10000;
-
-// Gør det muligt for din frontend at tale med backenden (CORS)
-const cors = require('cors');
 app.use(cors());
 
-// Simpel API-rute
-app.get('/api/data', (req, res) => {
-    res.json({ message: "Hej fra Node.js på Render!" });
+// Her styrer du priserne ét centralt sted
+const produkter = [
+    { id: 1, navn: "iPhone 12/13/14 Cover – Sort", pris: 20 },
+    { id: 2, navn: "VikLin.fun iPhone 11 Pro/XS/X Cover", pris: 20 },
+    { id: 3, navn: "VikLin.fun iPhone 7/8/SE Cover", pris: 25 } // Pris opdateret her
+];
+
+app.get('/api/products', (req, res) => {
+    res.json(produkter);
 });
 
-// Start serveren
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server kører på port ${PORT}`);
-});
-// Tilføj denne rute øverst sammen med dine andre app.get()
-app.get('/', (req, res) => {
-    res.send('Backend kører korrekt på Render!');
-});
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Server kører på port ${PORT}`));
