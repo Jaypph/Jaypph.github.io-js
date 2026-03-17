@@ -13,7 +13,7 @@ app.post('/api/checkout', (req, res) => {
     };
     
     ordrer.push(nyOrdre);
-    console.log("Ny ordre modtaget:", nyOrdre);
+    console.log("Ny ordre:", nyOrdre);
     
     res.json({ message: "Tak for din bestilling! Ordre ID: " + nyOrdre.id });
 });
