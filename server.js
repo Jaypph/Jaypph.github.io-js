@@ -15,14 +15,17 @@ const supabase = createClient(
 );
 
 // ======================
-// 🧠 TOKENIZER
+// ⚡ CACHE (hurtigere AI)
 // ======================
-function tokenize(text) {
-    return text
-        .toLowerCase()
-        .replace(/[^\wæøå\s]/g, '')
-        .split(/\s+/)
-        .filter(Boolean);
+const cache = new Map();
+
+function getCache(key) {
+    return cache.get(key);
+}
+
+function setCache(key, value) {
+    cache.set(key, value);
+    setTimeout(() => cache.delete(key), 1000 * 60 * 10); // 10 min
 }
 
 // ======================
@@ -35,31 +38,87 @@ const bannedWords = [
 
 function isBlocked(text) {
     const lower = text.toLowerCase();
-    return bannedWords.some(word => lower.includes(word));
+    return bannedWords.some(w => lower.includes(w));
 }
 
 // ======================
-// 📚 BASIS VIDEN
+// 🧠 SYNONYMER (dansk forståelse)
+// ======================
+const synonyms = {
+    hej: ["hej", "hallo", "goddag", "yo"],
+    pris: ["pris", "koster", "betaling", "værdi"],
+    levering: ["levering", "fragt", "sendes", "transport"],
+    iphone: ["iphone", "apple telefon", "ios mobil"],
+    tak: ["tak", "mange tak", "thx"]
+};
+
+function normalizeWithSynonyms(tokens) {
+    let result = [];
+
+    for (let t of tokens) {
+        let mapped = false;
+
+        for (let key in synonyms) {
+            if (synonyms[key].includes(t)) {
+                result.push(key);
+                mapped = true;
+                break;
+            }
+        }
+
+        if (!mapped) result.push(t);
+    }
+
+    return result;
+}
+
+// ======================
+// 🧠 TOKENIZER
+// ======================
+function tokenize(text) {
+    const tokens = text
+        .toLowerCase()
+        .replace(/[^\wæøå\s]/g, '')
+        .split(/\s+/)
+        .filter(Boolean);
+
+    return normalizeWithSynonyms(tokens);
+}
+
+// ======================
+// 📚 BASE VIDEN
 // ======================
 const baseKnowledge = [
     { input: "hej", response: "Hej! Hvordan kan jeg hjælpe dig?" },
-    { input: "hvad koster jeres produkter", response: "Alle produkter koster 20 kr." },
-    { input: "levering", response: "Levering tager typisk 1-3 hverdage." },
+    { input: "pris", response: "Alle produkter koster 20 kr." },
+    { input: "levering", response: "Levering tager 1-3 hverdage." },
     { input: "iphone", response: "Vi har covers til flere iPhone modeller." },
     { input: "tak", response: "Selv tak!" }
 ];
 
 // ======================
-// 🧠 MATCH ENGINE
+// 📥 DB VIDEN (selvlærende)
+// ======================
+async function loadKnowledgeFromDB() {
+    const { data } = await supabase
+        .from('ai_learning')
+        .select('*')
+        .eq('approved', true);
+
+    return data || [];
+}
+
+// ======================
+// 🧠 SCORING ENGINE
 // ======================
 function scoreMatch(inputTokens, entryTokens) {
     let score = 0;
 
-    for (let token of inputTokens) {
-        if (entryTokens.includes(token)) score += 2;
+    for (let t of inputTokens) {
+        if (entryTokens.includes(t)) score += 2;
 
-        for (let word of entryTokens) {
-            if (word.startsWith(token) || token.startsWith(word)) {
+        for (let w of entryTokens) {
+            if (w.startsWith(t) || t.startsWith(w)) {
                 score += 1;
             }
         }
@@ -69,29 +128,14 @@ function scoreMatch(inputTokens, entryTokens) {
 }
 
 // ======================
-// 📥 HENT VIDEN FRA DB
-// ======================
-async function loadKnowledgeFromDB() {
-    const { data, error } = await supabase
-        .from('ai_learning')
-        .select('*')
-        .eq('approved', true);
-
-    if (error) {
-        console.error(error);
-        return [];
-    }
-
-    return data.map(row => ({
-        input: row.input,
-        response: row.response
-    }));
-}
-
-// ======================
-// 🧠 AI LOGIK
+// 🧠 AI ENGINE
 // ======================
 async function findBestAnswer(input) {
+
+    // ⚡ CACHE FIRST
+    const cached = getCache(input);
+    if (cached) return cached;
+
     const inputTokens = tokenize(input);
 
     const dbKnowledge = await loadKnowledgeFromDB();
@@ -112,6 +156,8 @@ async function findBestAnswer(input) {
 
     if (bestScore < 2) return null;
 
+    setCache(input, bestAnswer);
+
     return bestAnswer;
 }
 
@@ -122,21 +168,19 @@ app.post('/api/ai', async (req, res) => {
     const { message } = req.body;
 
     if (!message) {
-        return res.status(400).json({ error: "Ingen besked sendt" });
+        return res.status(400).json({ error: "Ingen besked" });
     }
 
-    // 🚫 Filter
+    // 🚫 filter
     if (isBlocked(message)) {
-        return res.json({
-            response: "Det kan jeg ikke hjælpe med."
-        });
+        return res.json({ response: "Det kan jeg ikke hjælpe med." });
     }
 
     let response = await findBestAnswer(message);
 
-    // ❗ Hvis AI ikke kender svaret
+    // 🧠 læring hvis ukendt
     if (!response) {
-        response = "Det ved jeg ikke endnu – men jeg lærer det gerne!";
+        response = "Jeg ved det ikke endnu – men jeg lærer det gerne!";
 
         await supabase.from('ai_learning').insert([
             {
@@ -147,7 +191,6 @@ app.post('/api/ai', async (req, res) => {
         ]);
     }
 
-    // 💾 Log chat
     await supabase.from('chat_logs').insert([
         { input: message, output: response }
     ]);
@@ -156,28 +199,23 @@ app.post('/api/ai', async (req, res) => {
 });
 
 // ======================
-// 🧑‍💼 ADMIN: GODKEND SVAR
+// 🧑‍💼 ADMIN: GODKEND
 // ======================
 app.post('/api/ai/approve', async (req, res) => {
     const { id, response } = req.body;
 
     const { error } = await supabase
         .from('ai_learning')
-        .update({
-            response: response,
-            approved: true
-        })
+        .update({ response, approved: true })
         .eq('id', id);
 
-    if (error) {
-        return res.status(500).json({ error: error.message });
-    }
+    if (error) return res.status(500).json({ error: error.message });
 
-    res.json({ message: "Svar godkendt!" });
+    res.json({ message: "Godkendt" });
 });
 
 // ======================
-// 📋 ADMIN: SE UGODKENDTE
+// 📋 ADMIN: PENDING
 // ======================
 app.get('/api/ai/pending', async (req, res) => {
     const { data, error } = await supabase
@@ -185,9 +223,7 @@ app.get('/api/ai/pending', async (req, res) => {
         .select('*')
         .eq('approved', false);
 
-    if (error) {
-        return res.status(500).json({ error: error.message });
-    }
+    if (error) return res.status(500).json({ error });
 
     res.json(data);
 });
@@ -197,11 +233,13 @@ app.get('/api/ai/pending', async (req, res) => {
 // ======================
 const produkter = [
     { id: 1, navn: "iPhone 12/13/14 Cover – Sort", pris: 20 },
-    { id: 2, navn: "VikLin.fun iPhone 11 Pro/XS/X Cover", pris: 20 },
-    { id: 3, navn: "VikLin.fun iPhone 7/8/SE Cover", pris: 20 }
+    { id: 2, navn: "VikLin.fun iPhone Cover", pris: 20 },
+    { id: 3, navn: "iPhone SE Cover", pris: 20 }
 ];
 
-app.get('/api/products', (req, res) => res.json(produkter));
+app.get('/api/products', (req, res) => {
+    res.json(produkter);
+});
 
 // ======================
 // 💳 CHECKOUT
@@ -211,11 +249,9 @@ app.post('/api/checkout', async (req, res) => {
 
     const { error } = await supabase
         .from('ordrer')
-        .insert([{ varer: cart, total: total }]);
+        .insert([{ varer: cart, total }]);
 
-    if (error) {
-        return res.status(500).json({ error: error.message });
-    }
+    if (error) return res.status(500).json({ error: error.message });
 
     res.json({ message: "Ordre gemt!", status: "Success" });
 });
@@ -224,6 +260,7 @@ app.post('/api/checkout', async (req, res) => {
 // 🚀 SERVER
 // ======================
 const PORT = process.env.PORT || 10000;
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server kører på port ${PORT}`);
 });
